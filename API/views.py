@@ -8,6 +8,7 @@ import re, os, time
 
 
 def text_finder(url, dirpath):
+    print("Start text scraping")
     opener = urllib.request.build_opener()
     opener.addheaders = [('User-agent', 'Mozilla/5.0')]
     urllib.request.install_opener(opener)
@@ -17,11 +18,13 @@ def text_finder(url, dirpath):
         script.decompose()
     texts = soup.findAll(text=True)
     text_data = u" ".join(t.strip() for t in texts)
+    print(text_data)
 
     if text_data:
-        os.makedirs(dirpath)
+        if not os.path.exists(dirpath):
+            os.makedirs(dirpath)
     else:
-        return Response(data={"Error": "Not found any text in site"}, status=status.HTTP_404_NOT_FOUND)
+        return False
 
     with open(os.path.join(dirpath, "SiteText.txt"), "w", encoding='utf-8') as text_file:
         text_file.write(text_data)
@@ -29,18 +32,20 @@ def text_finder(url, dirpath):
 
 
 def picture_finder(site, dirpath):
+    print("Start pictures scraping")
     response = requests.get(site)
     soup = BeautifulSoup(response.text, 'html.parser')
-    print(soup)
     for script in soup(["script", "style"]):
         script.decompose()
     img_tags = soup.find_all('img', {"src": True})
     urls = [img['src'] for img in img_tags]
-    print(f"All urls: {urls}", "\n")
+    # print(f"All urls: {urls}", "\n")
     if urls:
-        os.makedirs(dirpath)
+        if not os.path.exists(dirpath):
+            os.makedirs(dirpath)
     else:
-        return Response(data={"Error": "Not found any pictures in site"}, status=status.HTTP_404_NOT_FOUND)
+        return False
+    
     for url in urls:
         if 'http' not in url:
             url = '{}{}'.format(site, url)
@@ -52,7 +57,6 @@ def picture_finder(site, dirpath):
             opener.addheaders = [('User-agent', 'Mozilla/5.0')]
             urllib.request.install_opener(opener)
             urllib.request.urlretrieve(url, os.path.join(dirpath, picture_name))
-            print("done")
     return True
 
 
@@ -88,7 +92,7 @@ class ScrapperView(APIView):
             else:
                 return Response(data={"Error": "Something went wrong"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         elif request.data["type"] == "both":
-            if picture_finder(request.data["url"], dir_path) and text_finder(request.data["url"], dir_path):
+            if (picture_finder(request.data["url"], dir_path) and text_finder(request.data["url"], dir_path)):
                 return Response(data={"Success": "Done"}, status=status.HTTP_200_OK)
             else:
                 return Response(data={"Error": "Something went wrong"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
