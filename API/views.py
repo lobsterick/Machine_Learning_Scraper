@@ -6,22 +6,17 @@ from bs4 import BeautifulSoup
 import urllib.request
 import re, os, time
 from background_task import background
-
-tasks = {}
+from background_task.models import Task
+from background_task.models_completed import CompletedTask
 
 
 @background()
-def text_finder(url, dirpath, task_id):
-    global tasks
-    task_id = int(task_id)
-
-    tasks[task_id] = "started"
-    print("Start text scraping, id: ", task_id)
-
+def text_finder(site, dirpath):
+    print(f"Start text scraping for {site}")
     opener = urllib.request.build_opener()
     opener.addheaders = [('User-agent', 'Mozilla/5.0')]
     urllib.request.install_opener(opener)
-    html_page = urllib.request.urlopen(url).read()
+    html_page = urllib.request.urlopen(site).read()
     soup = BeautifulSoup(html_page, 'html.parser')
     for script in soup(["script", "style"]):
         script.decompose()
@@ -35,16 +30,12 @@ def text_finder(url, dirpath, task_id):
     with open(os.path.join(dirpath, "SiteText.txt"), "w", encoding='utf-8') as text_file:
         text_file.write(text_data)
 
-    tasks[task_id] = "finished"
-    print("Finished text scraping, id: ", task_id)
+    print(f"Finished text scraping for {site}")
 
 
 @background()
-def picture_finder(site, dirpath, task_id):
-    global tasks
-    task_id = int(task_id)
-    tasks[task_id] = "started"
-    print("Start pictures scraping, id: ", task_id)
+def picture_finder(site, dirpath):
+    print(f"Start pictures scraping from {site}")
     response = requests.get(site)
     soup = BeautifulSoup(response.text, 'html.parser')
     for script in soup(["script", "style"]):
@@ -65,14 +56,12 @@ def picture_finder(site, dirpath, task_id):
             urllib.request.install_opener(opener)
             urllib.request.urlretrieve(url, os.path.join(dirpath, picture_name))
 
-    tasks[task_id] = "finished"
-    print("Finished pictures scraping, id: ", task_id)
+    print(f"Finished pictures scraping from {site}")
 
 
 class ScrapperView(APIView):
 
     def post(self, request):
-        global tasks
         if not (request.data.get("type") and request.data.get("url")):
             return Response(data={"Error": "Didn't provide type or url of request)"}, status=status.HTTP_400_BAD_REQUEST)
         elif not request.data["type"] in ["pictures", "text", "both"]:
@@ -91,27 +80,31 @@ class ScrapperView(APIView):
         dir_path = os.path.join('scrapped-data', today_day_str, today_hour_str)
 
         if request.data["type"] == "pictures":
-            task_id = len(tasks)
-            tasks.update({task_id: "undone"})
-            picture_finder(request.data["url"], dir_path, task_id)
-            return Response(data={"success": "done", "task_id": task_id}, status=status.HTTP_200_OK)
+            verbose_name = picture_finder(request.data["url"], dir_path, verbose_name=time.time())
+            new_task = Task.objects.get(verbose_name=verbose_name)
+            task_hash = new_task.task_hash
+            return Response(data={"success": "done", "task_hash": task_hash}, status=status.HTTP_200_OK)
         elif request.data["type"] == "text":
-            task_id = len(tasks)
-            tasks.update({task_id: "undone"})
-            text_finder(request.data["url"], dir_path, task_id)
-            return Response(data={"success": "done", "task_id": task_id}, status=status.HTTP_200_OK)
+            verbose_name = text_finder(request.data["url"], dir_path, verbose_name=time.time())
+            new_task = Task.objects.get(verbose_name=verbose_name)
+            task_hash = new_task.task_hash
+            return Response(data={"success": "done", "task_hash": task_hash}, status=status.HTTP_200_OK)
         elif request.data["type"] == "both":
-            task_id = len(tasks)
-            tasks.update({task_id: "undone"})
-            text_finder(request.data["url"], dir_path, task_id)
-            task_id = len(tasks)
-            tasks.update({task_id: "undone"})
-            picture_finder(request.data["url"], dir_path, task_id)
-            return Response(data={"success": "done", "task_id_text": task_id - 1, "task_id_pictures": task_id}, status=status.HTTP_200_OK)
+            verbose_name_pictures = picture_finder(request.data["url"], dir_path, verbose_name=time.time())
+            new_task = Task.objects.get(verbose_name=verbose_name_pictures)
+            task_hash_pictures = new_task.task_hash
+            verbose_name_text = text_finder(request.data["url"], dir_path, verbose_name=time.time())
+            new_task = Task.objects.get(verbose_name=verbose_name_text)
+            task_hash_text = new_task.task_hash
+            return Response(data={"success": "done", "task_hash_text": task_hash_text, "task_hash_pictures": task_hash_pictures}, status=status.HTTP_200_OK)
 
     def get(self, request):
-        global tasks
-        print(tasks)
-        task_id = int(request.data["id"])
-        state = tasks[task_id]
-        return Response(data={"task_number": task_id, "state": state}, status=status.HTTP_200_OK)
+        task_hash = request.data["hash"]
+        if Task.objects.filter(task_hash=task_hash).count() == 1 and not CompletedTask.objects.filter(task_hash=task_hash).exists():
+            unfinished_task = CompletedTask.objects.get(task_hash=task_hash)
+            return Response(data={"task_hash": task_hash, "state": "working", "id": unfinished_task.id}, status=status.HTTP_200_OK)
+        elif not Task.objects.filter(task_hash=task_hash).exists() and CompletedTask.objects.filter(task_hash=task_hash).count() == 1:
+            finished_task = CompletedTask.objects.get(task_hash=task_hash)
+            return Response(data={"task_hash": task_hash, "state": "finished", "id": finished_task.id}, status=status.HTTP_200_OK)
+        else:
+            return Response(data={"task_hash": task_hash, "state": "error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
